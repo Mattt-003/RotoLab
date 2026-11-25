@@ -340,30 +340,39 @@ void main(){
   o=vec4(m,0.,0.,1.);
 }`;
 SRC.bg=`
-uniform sampler2D uCur,uBg,uMot;uniform float uInit,uFrozen,uT0,uT1;
+uniform sampler2D uCur,uBg,uMot;uniform float uInit,uFrozen,uT0,uT1,uMem,uShad;
 void main(){
   ivec2 ip=ivec2(gl_FragCoord.xy);
   vec3 c=texelFetch(uCur,ip,0).rgb;vec4 b=texelFetch(uBg,ip,0);
   if(uInit>.5){o=vec4(c,0.);return;}
-  float fg=smoothstep(uT0,uT1,length(c-b.rgb));
+  float lc=lum(c),lb=max(lum(b.rgb),.03);
+  float dF=length(c-b.rgb);
+  float dS=length(c-b.rgb*clamp(lc/lb,.55,1.))*1.3;
+  float d=mix(dF,min(dF,dS),uShad);
+  float fg=smoothstep(uT0,uT1,d);
   float mo=texelFetch(uMot,ip,0).r;
-  float rate=fg>.5?(mo<.12?.006:0.):.05;
+  float rate=fg>.5?(mo<.12?uMem:0.):.05;
   if(uFrozen>.5)rate=0.;
   o=vec4(mix(b.rgb,c,rate),mix(b.a,fg,.6));
 }`;
 SRC.mask=`
-uniform sampler2D uBg;
+uniform sampler2D uBg,uPm;
 void main(){
   ivec2 ip=ivec2(gl_FragCoord.xy);ivec2 mx=textureSize(uBg,0)-1;float s=0.;
   for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++)s+=texelFetch(uBg,clamp(ip+ivec2(dx,dy),ivec2(0),mx),0).a;
-  o=vec4(s/9.,0.,0.,1.);
+  float m=smoothstep(.3,.7,s/9.);
+  float p=texelFetch(uPm,ip,0).r;
+  m=mix(p,m,m>p?.7:.4);
+  o=vec4(m,0.,0.,1.);
 }`;
 SRC.trk=`
-uniform sampler2D uSm,uMot;
+uniform sampler2D uSm,uMot,uMask;uniform float uTM;
 void main(){
   float l=textureLod(uSm,vUv,2.).a;
   float w=smoothstep(uLuz-.03,uLuz+.03,l);w=mix(w,1.-w,uPol);
-  o=vec4(w,clamp(textureLod(uMot,vec2(.5),8.).r,0.,1.),0.,1.);
+  float mv=smoothstep(.04,.2,textureLod(uMot,vUv,2.).r);
+  w=uTM<.5?w:(uTM<1.5?mv:max(w,mv));
+  o=vec4(w,clamp(textureLod(uMot,vec2(.5),8.).r,0.,1.),textureLod(uMask,vec2(.5),8.).r,1.);
 }`;
 SRC.copy=`
 uniform sampler2D uImg;
@@ -389,98 +398,161 @@ void main(){
   float a=clamp(uI*1.6,0.,1.)*mix(.35,1.,w);
   o=vec4(mix(orig,col,a),1.);
 }`;
-SRC.slide=`
-uniform sampler2D uImg,uMot;
-float off(float id,float slot,float act){
-  float a=step(1.-act,h1(id*3.3+slot*1.7));
-  return (h1(id*7.1+slot*2.3)-.5)*2.*a;
-}
-void main(){
-  float mo=clamp(textureLod(uMot,vUv,2.).r*uSens,0.,1.);
-  float gain=mix(.25,1.,clamp(mo*1.5,0.,1.));
-  float dx=0.;
-  for(int L=0;L<3;L++){
-    float bh=L==0?1./36.:(L==1?1./12.:1./4.);
-    float rate=L==0?6.:(L==1?3.:1.5);
-    float id=floor(vUv.y/bh)+float(L)*101.;
-    float ts=uTime*rate,slot=floor(ts);
-    float f=smoothstep(0.,.55,fract(ts));
-    float act=(.12+.6*clamp(uI+uDef,0.,1.))*(L==2?.5:1.);
-    float amp=L==0?.25:(L==1?.4:.6);
-    dx+=mix(off(id,slot,act),off(id,slot+1.,act),f)*amp*(.05+.95*clamp(uI+uDef,0.,1.5));
-  }
-  o=vec4(texture(uImg,vec2(fract(vUv.x+dx*gain),vUv.y)).rgb,1.);
-}`;
-SRC.flick=`
-uniform sampler2D uImg,uHold,uMot,uSm;
-void main(){
-  vec3 res=texture(uImg,vUv).rgb;
-  vec2 px=vUv*uRes;
-  for(int g=0;g<2;g++){
-    float s=uB*(g==0?1.:3.);
-    vec2 cell=floor(px/s);vec2 ctr=(cell+.5)*s/uRes;
-    float slot=floor(uTime*(g==0?20.:11.));
-    float mo=clamp(texture(uMot,ctr).r*uSens,0.,1.);
-    float l=textureLod(uSm,ctr,2.).a;
-    float w=smoothstep(uLuz-.3,uLuz+.3,l);w=mix(w,1.-w,uPol);
-    float p=(uI+uFlk)*(.025+1.0*mo+.3*w)*(g==0?1.:.5);
-    if(hash(cell+slot*1.37+float(g)*7.)<p){
-      float md=hash(cell*1.9+slot*.71+3.);
-      if(md<.25)res=texture(uHold,vUv).rgb;
-      else if(md<.45)res=1.-res;
-      else if(md<.62)res=uAcc*(.25+lum(res)*1.1);
-      else if(md<.75)res=vec3(hash(cell+slot)>.5?1.:0.);
-      else{
-        vec2 d=(vec2(hash(cell+slot*2.1),hash(cell+slot*3.7))-.5)*6.*s/uRes;
-        res=texture(uImg,clamp(vUv+d,0.,1.)).rgb;
-      }
-    }
-  }
-  o=vec4(res,1.);
-}`;
-SRC.thresh=`
-uniform sampler2D uImg;
-void main(){
-  float l=lum(texture(uImg,vUv).rgb);
-  float g=max(1.,uGrain);
-  vec2 cell=floor(vUv*uRes/g);
-  float t=floor(uTime*24.);
-  float n=hash(cell+t*.7)-.5;
-  float n2=vn(cell*.12+t*.3)-.5;
-  float nn=mix(n,n2*1.4,.3)*uNoise*1.4;
-  float v=smoothstep(-.02,.02,l-(uLuz+nn));
-  v=mix(v,1.-v,uPol);
-  o=vec4(mix(vec3(.03,.035,.05),uAcc,v),1.);
-}`;
-SRC.poster=`
-uniform sampler2D uImg;
-void main(){
-  vec3 c=texture(uImg,vUv).rgb;float n=2.+floor((1.-uI)*6.);
-  o=vec4(floor(c*n+.5)/n,1.);
-}`;
 SRC.roto=`
-uniform sampler2D uImg,uMask;
+uniform sampler2D uImg,uMask,uSrc;uniform vec2 uTx;
+uniform float uRM,uSoft,uLine,uAl;uniform vec3 uRCol;
+vec3 G(vec2 uv){return texture(uSrc,(uv-.5)*uTx+.5).rgb;}
 float mk(vec2 uv){
   vec2 t=1./vec2(textureSize(uMask,0));float s=0.;
-  for(int i=-1;i<=1;i++)for(int j=-1;j<=1;j++)s+=texture(uMask,uv+vec2(float(i),float(j))*t*1.3).r;
+  for(int i=-1;i<=1;i++)for(int j=-1;j<=1;j++)s+=texture(uMask,uv+vec2(float(i),float(j))*t*1.2).r;
   return s/9.;
 }
-float L(vec2 uv){return lum(texture(uImg,uv).rgb);}
+float matte(vec2 uv){
+  vec2 t=1./vec2(textureSize(uMask,0));
+  vec3 c0=G(uv);float s=texture(uMask,uv).r,w=1.;
+  for(int i=0;i<12;i++){
+    float fi=float(i),a=fi*2.39996+1.3,r=sqrt((fi+.5)/12.)*2.4;
+    vec2 off=vec2(cos(a),sin(a))*r*t;
+    vec3 d=G(uv+off)-c0;
+    float wt=exp(-dot(d,d)*45.-r*r*.15);
+    s+=texture(uMask,uv+off).r*wt;w+=wt;
+  }
+  return s/w;
+}
 void main(){
   vec3 img=texture(uImg,vUv).rgb;
-  float subj=smoothstep(.40,.62,mk(vUv));
-  vec3 col=mix(bgStyle(img),img,subj);
-  float tt=floor(uTime*10.);
-  vec2 j=(vec2(vn(vUv*vec2(24.,42.)+tt*3.1),vn(vUv*vec2(24.,42.)+tt*5.7+9.))-.5)*.012*(1.+uDef*3.);
-  float e=1.-smoothstep(0.,.07,abs(mk(vUv+j)-.5));
-  vec2 p=vec2(2.*uPs)/uRes;
-  float a=L(vUv+vec2(-p.x,-p.y)),b=L(vUv+vec2(0.,-p.y)),c=L(vUv+vec2(p.x,-p.y));
-  float d=L(vUv+vec2(-p.x,0.)),f=L(vUv+vec2(p.x,0.));
-  float g=L(vUv+vec2(-p.x,p.y)),h=L(vUv+vec2(0.,p.y)),k=L(vUv+vec2(p.x,p.y));
-  float gx=(c+2.*f+k)-(a+2.*d+g),gy=(g+2.*h+k)-(a+2.*b+c);
-  float ed=smoothstep(.35,.9,length(vec2(gx,gy)))*subj;
-  col=mix(col,uAcc,clamp(max(e,ed*.6*(.3+uI)),0.,1.));
-  o=vec4(col,1.);
+  float m=matte(vUv);
+  float subj=smoothstep(.5-uSoft,.5+uSoft,m);
+  vec3 bg=bgStyle(img),col;
+  if(uRM<.5)col=mix(bg,img,subj);
+  else if(uRM<1.5)col=mix(bg,uRCol,subj);
+  else if(uRM<2.5)col=vec3(subj);
+  else if(uRM<3.5)col=mix(bg,img*.55,subj);
+  else col=mix(bg,img,subj);
+  if(uLine>.01){
+    float tt=floor(uTime*10.);
+    vec2 j=(vec2(vn(vUv*vec2(24.,42.)+tt*3.1),vn(vUv*vec2(24.,42.)+tt*5.7+9.))-.5)*.010*(1.+uDef*3.);
+    vec2 t=1./vec2(textureSize(uMask,0));
+    vec2 q=vUv+j;
+    float mj=mk(q);
+    vec2 g=vec2(mk(q+vec2(t.x,0.))-mk(q-vec2(t.x,0.)),mk(q+vec2(0.,t.y))-mk(q-vec2(0.,t.y)))*.5;
+    float dist=abs(mj-.5)/max(length(g),.03);
+    float e=1.-smoothstep(.25,.9,dist);
+    col=mix(col,uRCol,clamp(e*uLine,0.,1.));
+  }
+  o=vec4(col,mix(1.,subj,uAl));
+}`;
+SRC.morph=`
+uniform sampler2D uM;uniform float uGrow;
+void main(){
+  ivec2 ip=ivec2(gl_FragCoord.xy);ivec2 mx=textureSize(uM,0)-1;
+  float c=texelFetch(uM,ip,0).r,mn=1.,mxv=0.;
+  for(int dy=-2;dy<=2;dy++)for(int dx=-2;dx<=2;dx++){
+    float v=texelFetch(uM,clamp(ip+ivec2(dx,dy),ivec2(0),mx),0).r;mn=min(mn,v);mxv=max(mxv,v);
+  }
+  float r=uGrow>0.?mix(c,mxv,uGrow):mix(c,mn,-uGrow);
+  o=vec4(r,0.,0.,1.);
+}`;
+/* SLIDES: captura de un cuadrado al atlas + dibujo del parche congelado */
+SRC.slcap=`
+uniform sampler2D uImg;uniform vec4 uRect;
+void main(){vec2 uv=uRect.xy+(vUv-.5)*2.*uRect.zw;o=vec4(texture(uImg,uv).rgb,1.);}`;
+SRC.slshow=`
+uniform sampler2D uAtl;uniform vec4 uTile;uniform float uA,uBurn,uBpx,uBorder;uniform vec2 uPx;uniform vec3 uLine;
+void main(){
+  vec3 c=texture(uAtl,uTile.xy+vUv*uTile.z).rgb;
+  if(uBurn>.5){
+    vec3 b=textureLod(uAtl,uTile.xy+(vUv*.9+.05)*uTile.z,2.).rgb;
+    float l=lum(mix(c,b,.7));
+    l=clamp((l-.25)*2.7+.08,0.,1.);
+    c=vec3(l);
+  }
+  vec2 e=min(vUv,1.-vUv)*uPx;
+  float bd=1.-smoothstep(uBpx-.5,uBpx+.5,min(e.x,e.y));
+  c=mix(c,uLine,bd*uBorder);
+  o=vec4(c,uA);
+}`;
+SRC.slcopy=`uniform sampler2D uImg;void main(){o=texture(uImg,vUv);}`;
+SRC.sllive=`
+uniform sampler2D uImg;uniform vec4 uSrc;uniform float uA,uBpx,uBorder;uniform vec2 uPx;uniform vec3 uLine;
+void main(){
+  vec3 c=texture(uImg,uSrc.xy+(vUv-.5)*2.*uSrc.zw).rgb;
+  vec2 e=min(vUv,1.-vUv)*uPx;
+  float bd=1.-smoothstep(uBpx-.5,uBpx+.5,min(e.x,e.y));
+  o=vec4(mix(c,uLine,bd*uBorder),uA);
+}`;
+/* COLLAGE: copias del recorte (anillo de sujetos con alpha) con borde tipo papel y sombra */
+SRC.collage=`
+uniform sampler2D uImg,uL0,uL1,uL2;
+uniform float uN,uSpread,uAng,uTint,uEdge,uShadow,uJit,uTq;uniform vec3 uEC,uTC0,uTC1,uTC2;
+vec4 L(int i,vec2 uv){if(i==0)return texture(uL0,uv);if(i==1)return texture(uL1,uv);return texture(uL2,uv);}
+float EA(int i,vec2 uv,float r){
+  float m=0.,asp=uRes.x/uRes.y;
+  for(int k=0;k<8;k++){float a=float(k)*.7854;m=max(m,L(i,uv+vec2(cos(a),sin(a)*asp)*r).a);}
+  return m;
+}
+void main(){
+  vec4 cur=texture(uImg,vUv);vec3 col=cur.rgb;
+  float asp=uRes.x/uRes.y,r=uEdge*.012;
+  vec2 dir=vec2(cos(uAng),sin(uAng)*asp);
+  vec3 tc[3];tc[0]=uTC0;tc[1]=uTC1;tc[2]=uTC2;
+  for(int i=2;i>=0;i--){
+    if(float(i)>=uN)continue;
+    float fi=float(i+1);
+    vec2 j=(vec2(vn(vec2(fi*3.1,uTq)),vn(vec2(fi*5.7,uTq+7.)))-.5)*uJit*.05;
+    vec2 uv=vUv-dir*uSpread*fi*.09-j;
+    vec4 l=L(i,uv);
+    if(uEdge>.001)col=mix(col,uEC,clamp(EA(i,uv,r)-l.a,0.,1.));
+    vec3 lc=mix(l.rgb,tc[i]*(lum(l.rgb)*1.5+.1),uTint);
+    col=mix(col,lc,l.a);
+  }
+  float sh=texture(uImg,vUv-vec2(.012,-.008)*vec2(1.,asp)*(1.+uShadow)).a;
+  col*=1.-uShadow*.6*sh*(1.-cur.a);
+  if(uEdge>.001){
+    float m=0.;
+    for(int k=0;k<8;k++){float a=float(k)*.7854;m=max(m,texture(uImg,vUv+vec2(cos(a),sin(a)*asp)*r).a);}
+    col=mix(col,uEC,clamp(m-cur.a,0.,1.));
+  }
+  col=mix(col,cur.rgb,cur.a);
+  o=vec4(col,cur.a);
+}`;
+SRC.cut=`
+uniform sampler2D uImg,uD;uniform float uEdge;uniform vec2 uOff;uniform vec3 uEC;
+void main(){
+  vec4 cur=texture(uImg,vUv);vec2 uv=vUv-uOff;
+  vec4 d=texture(uD,uv);float asp=uRes.x/uRes.y,r=uEdge*.012,m=0.;
+  for(int k=0;k<8;k++){float a=float(k)*.7854;m=max(m,texture(uD,uv+vec2(cos(a),sin(a)*asp)*r).a);}
+  vec3 col=mix(cur.rgb,uEC,clamp(m-d.a,0.,1.)*step(.001,uEdge));
+  col=mix(col,d.rgb,d.a);
+  o=vec4(col,max(cur.a,d.a));
+}`;
+/* FLICKER: una sola luz que parpadea (brillo + derrame sobre la escena) */
+SRC.flick=`
+uniform sampler2D uImg;uniform vec2 uLP;uniform vec3 uLC;uniform float uLS,uLV,uLSp;
+void main(){
+  vec3 img=texture(uImg,vUv).rgb;
+  vec2 d=(vUv-uLP)*vec2(uRes.x/uRes.y,1.);
+  float r2=dot(d,d),s=max(uLS,.01);
+  float glow=exp(-r2/(2.*s*s)),core=exp(-r2/(2.*s*s*.03)),wide=exp(-sqrt(r2)/(s*4.));
+  vec3 add=uLC*(glow*.85+core*1.1)*uLV;
+  vec3 res=1.-(1.-img)*(1.-clamp(add,0.,1.));
+  res+=img*uLC*wide*uLSp*uLV;
+  o=vec4(res,1.);
+}`;
+/* CAJAS: detector de esquinas (autovalor mínimo del tensor de estructura) + movimiento */
+SRC.feat=`
+uniform sampler2D uSm,uMot;
+void main(){
+  vec2 t=1./vec2(216.,384.);float a=0.,b=0.,c=0.;
+  for(int i=-1;i<=1;i++)for(int j=-1;j<=1;j++){
+    vec2 p=vUv+vec2(float(i),float(j))*t*1.5;
+    float gx=textureLod(uSm,p+vec2(t.x,0.),0.).a-textureLod(uSm,p-vec2(t.x,0.),0.).a;
+    float gy=textureLod(uSm,p+vec2(0.,t.y),0.).a-textureLod(uSm,p-vec2(0.,t.y),0.).a;
+    a+=gx*gx;b+=gy*gy;c+=gx*gy;
+  }
+  float tr=a+b,det=a*b-c*c;
+  float lmin=.5*(tr-sqrt(max(tr*tr-4.*det,0.)));
+  o=vec4(clamp(lmin*30.,0.,1.),clamp(textureLod(uMot,vUv,0.).r,0.,1.),clamp(tr*8.,0.,1.),1.);
 }`;
 SRC.shapes=`
 uniform sampler2D uImg,uSm,uMot;uniform float uCs;
@@ -697,10 +769,10 @@ for(const k in SRC)P[k]=mkProg(SRC[k]);
 const PAL=[{n:'Magenta',c:'#ff4fa3'},{n:'Cian',c:'#4fe3ff'},{n:'Ámbar',c:'#ffb02e'},{n:'Blanco',c:'#f2f4fa'}];
 const SHAPES=['Círculo','Cuadrado','Triángulo','Línea','Cruz'];
 const MODES=['oscuro','color','claro','cámara'];
-const EFFECTS=[['roto','Roto'],['track','Tracking'],['mosaic','Mosaico'],['slide','Slides'],['flick','Flicker'],['shapes','Formas'],['thresh','Umbral'],['poster','Poster']];
+const EFFECTS=[['roto','Roto'],['track','Tracking'],['mosaic','Mosaico'],['slide','Slides'],['flick','Flicker'],['shapes','Formas'],['boxes','Cajas'],['stut','Stutter']];
 const MONO='"IBM Plex Mono",ui-monospace,Menlo,monospace';
 const st={
-  on:{roto:false,track:true,mosaic:true,slide:false,flick:false,shapes:false,thresh:false,poster:false,fb:false,disp:false,rgb:false,sort:false},
+  on:{roto:false,track:true,mosaic:true,slide:false,flick:false,shapes:false,boxes:false,stut:false,fb:false,disp:false,rgb:false,sort:false},
   intensity:.6,block:32,sens:40,luz:.55,noise:.35,grain:3,pol:0,mode:0,shape:0,color:0,
   facing:'user',source:'none',img:null,frozen:false,reinit:false,res:'auto'
 };
@@ -713,13 +785,13 @@ const EF={intensity:.6,block:32,sens:40,luz:.55,noise:.35,grain:3,acc:[1,.31,.64
   disp:0,dispF:1,fbA:0,fbD:0,fbZ:0,fbS:0,rgbo:0,sortT:0,sortL:0,geoC:1,geoS:1,geoV:1,colh:0};
 
 /* ---------- buffers principales (resolución adaptativa) ---------- */
-let RS=1,RW=OW,RH=OH,T=null,H=null,FB=null,fbi=0;
+let RS=1,RW=OW,RH=OH,T=null,FB=null,fbi=0;
 const FBS={on:false};
 function freeRT(r){if(!r)return;gl.deleteTexture(r.tex);gl.deleteFramebuffer(r.fb);}
 function allocMain(rs){
-  if(T){freeRT(T[0]);freeRT(T[1]);freeRT(H);freeRT(FB[0]);freeRT(FB[1]);}
+  if(T){freeRT(T[0]);freeRT(T[1]);freeRT(FB[0]);freeRT(FB[1]);}
   RS=rs;RW=Math.max(2,Math.round(OW*rs/2)*2);RH=Math.max(2,Math.round(OH*rs/2)*2);
-  T=[mkRT(RW,RH,F8),mkRT(RW,RH,F8)];H=mkRT(RW,RH,F8);FB=[mkRT(RW,RH,F8),mkRT(RW,RH,F8)];fbi=0;
+  T=[mkRT(RW,RH,F8),mkRT(RW,RH,F8)];FB=[mkRT(RW,RH,F8),mkRT(RW,RH,F8)];fbi=0;
   FBS.on=false;
 }
 allocMain(1);
@@ -744,7 +816,10 @@ function beginLite(Pg,target,w,h){
 const cA=[mkRT(AW,AH,F8,true),mkRT(AW,AH,F8,true)];
 const mM=[mkRT(AW,AH,F16,true),mkRT(AW,AH,F16,true)];
 const bgR=[mkRT(AW,AH,FHI),mkRT(AW,AH,FHI)];
-const maskR=mkRT(AW,AH,F8);
+const maskP=[mkRT(AW,AH,F8),mkRT(AW,AH,F8)];let mpi=0;
+const maskR=mkRT(AW,AH,F8,true);
+const FXW=108,FXH=192;
+const featR=mkRT(FXW,FXH,F8);
 const trkR=mkRT(TW,TH,F8);
 let ci=0,mj=0,bj=0,needInit=true,frameN=0;
 
@@ -762,23 +837,28 @@ function render(s,t){
   U('uThr',.14-.115*EF.sens/100);U('uFirst',needInit?1:0);draw3();mip(mo);
   const bn=bgR[bj],bp=bgR[1-bj];
   begin(P.bg,bn,AW,AH);tex('uCur',cur.tex,0);tex('uBg',bp.tex,1);tex('uMot',mo.tex,2);
-  U('uInit',(needInit||st.reinit)?1:0);U('uFrozen',st.frozen?1:0);U('uT0',.1);U('uT1',.22);draw3();
-  begin(P.mask,maskR,AW,AH);tex('uBg',bn.tex,0);draw3();
+  U('uInit',(needInit||st.reinit)?1:0);U('uFrozen',st.frozen?1:0);U('uT0',RTP.tol*.002);U('uT1',RTP.tol*.0044);U('uMem',RTP.mem*.00015);U('uShad',RTP.shad?1:0);draw3();
+  if(on.roto){
+    const mn=maskP[mpi];
+    begin(P.mask,mn,AW,AH);tex('uBg',bn.tex,0);tex('uPm',maskP[1-mpi].tex,1);draw3();
+    begin(P.morph,maskR,AW,AH);tex('uM',mn.tex,0);U('uGrow',RTP.grow/100);draw3();mip(maskR);mpi=1-mpi;
+  }
   bj=1-bj;
 
   let a=0;
   begin(P.base,T[0],RW,RH);tex('uSrc',srcTex,0);U('uTx',tx);draw3();
   const pass=(Pg,fn)=>{begin(Pg,T[1-a],RW,RH);tex('uImg',T[a].tex,0);if(fn)fn();draw3();a=1-a;};
   if(on.mosaic)pass(P.mosaic,()=>{tex('uSm',cur.tex,1);tex('uMot',mo.tex,2);});
-  if(on.slide)pass(P.slide,()=>{tex('uMot',mo.tex,2);});
-  if(on.flick||EF.flk>.02){
-    if(frameN%8===0||frameN<2){begin(P.copy,H,RW,RH);tex('uImg',T[a].tex,0);draw3();}
-    pass(P.flick,()=>{tex('uSm',cur.tex,1);tex('uMot',mo.tex,2);tex('uHold',H.tex,3);U('uI',on.flick?EF.intensity:0);});
-  }
-  if(on.thresh)pass(P.thresh);
-  if(on.poster)pass(P.poster);
-  if(on.roto)pass(P.roto,()=>{tex('uMask',maskR.tex,1);});
+  const sd=on.stut?stutD():0;
+  if(on.roto){const al=srNeed()?1:0;pass(P.roto,()=>{U('uAl',al);tex('uMask',maskR.tex,1);tex('uSrc',srcTex,3);U('uTx',tx);U('uRM',RTP.mode);U('uSoft',.03+RTP.soft*.003);U('uLine',RTP.line/100);U('uRCol',rotoCol());});
+    if(al){srEnsure(T[a].tex);srPush(T[a].tex);if(RTP.mode===4)a=collagePass(a);if(on.stut&&SU.target===1&&sd>0)a=cutPass(a,sd);}else srIdle();
+  }else srIdle();
+  if(on.slide)a=slidePass(a);else slideIdle();
   if(on.shapes)pass(P.shapes,()=>{tex('uSm',cur.tex,1);tex('uMot',mo.tex,2);U('uCs',Math.max(18,EF.block*1.2)*(RW/OW));});
+  if(on.flick||EF.flk>.02){
+    const L=flState();
+    if(L.v>.003)pass(P.flick,()=>{U('uLP',L.p);U('uLC',L.c);U('uLS',L.s);U('uLV',L.v);U('uLSp',L.sp);});
+  }
 
   /* FX LAB: sorting -> desplazamiento -> geometría -> feedback -> canales RGB -> grade final */
   a=fxSort(a);
@@ -788,6 +868,7 @@ function render(s,t){
   curTex=fxFeedback(a,curTex);
   fxRingPush(curTex);
   const rg=fxRgb(a,curTex);a=rg.a;curTex=rg.tex;
+  if(on.stut&&(SU.target===0||!on.roto)){const d=sd;if(d>0){const rt=ringTex(d);if(rt)curTex=rt;}}
 
   begin(P.final,null,OW,OH);tex('uImg',curTex,0);
   U('uFlash',EF.flash);U('uShift',[EF.shx,EF.shy]);U('uPos',[EF.px,EF.py]);
@@ -795,10 +876,13 @@ function render(s,t){
   draw3();
   octx.drawImage(glc,0,0);
 
-  if(on.track||MOD.useMotion){
-    if(Q.level<2||frameN%2===0){begin(P.trk,trkR,TW,TH);tex('uSm',cur.tex,1);tex('uMot',mo.tex,2);draw3();readTrk(on.track);}
+  const needB=on.track||on.slide||(on.flick&&FL.follow);
+  if(needB||on.roto||MOD.useMotion){
+    if(Q.level<2||frameN%2===0){begin(P.trk,trkR,TW,TH);tex('uSm',cur.tex,1);tex('uMot',mo.tex,2);tex('uMask',maskR.tex,3);U('uTM',TKM.mode);draw3();readTrk(needB);rotoWatch();}
   }
-  if(on.track)drawTracks();else tracks=[];
+  if(on.boxes&&(Q.level<2||frameN%2===1)){begin(P.feat,featR,FXW,FXH);tex('uSm',cur.tex,1);tex('uMot',mo.tex,2);draw3();boxesUpdate();}
+  if(on.track)drawTracks();else if(!needB)tracks=[];
+  if(on.boxes)drawBoxes();
   ci=1-ci;mj=1-mj;needInit=false;st.reinit=false;
 }
 
@@ -1352,7 +1436,7 @@ function fxPrep(){
   FXE.fbSx=FX.fb_sx/1000+EF.fbS;FXE.fbSy=FX.fb_sy/1000;
   FXE.fbN=FX.fb_noise/1000;
   const rgbOn=st.on.rgb;
-  FXE.ringNeed=(st.on.fb&&(FX.fb_delay>0||FX.fb_echo>0))||(rgbOn&&(FX.rgb_dr>0||FX.rgb_dg>0||FX.rgb_db>0));
+  FXE.ringNeed=(st.on.fb&&(FX.fb_delay>0||FX.fb_echo>0))||(rgbOn&&(FX.rgb_dr>0||FX.rgb_dg>0||FX.rgb_db>0))||st.on.stut;
 }
 
 /* ---- anillo de cuadros ---- */
@@ -1448,6 +1532,322 @@ function fxSort(a){
   U('uMetric',metric);U('uLo',lo);U('uHi',hi);U('uSI',FX.sort_int/100);
   draw3();
   return 1-a;
+}
+
+/* =====================================================================
+   ROTO 2.0 · SLIDES (cuadrados congelados que se trackean) · FLICKER (una luz)
+   · CAJAS (tracking de puntos al estilo del video de referencia)
+   Los shaders viven en b.js; el orden de pases está en render() (c2.js).
+   ===================================================================== */
+const fh=n=>{const x=Math.sin(n*91.3458)*47453.5453;return x-Math.floor(x);};
+const LIME=[.78,.9,.24];
+
+/* ---------- ROTO ---------- */
+const RTP={mode:0,tol:50,soft:40,grow:0,mem:20,line:30,shad:true,cyc:true,ci:0,prev:0};
+const ROT_MODES=['Aislar','Silueta','Matte','Contorno','Collage'];
+const ROT_COLS=['#ff4fa3','#4fe3ff','#ffb02e','#9dff4f','#b04fff','#f2f4fa'].map(hexRgb);
+function rotoCol(){return RTP.cyc?ROT_COLS[RTP.ci%ROT_COLS.length]:EF.acc;}
+/* si el área del sujeto pasa de ~0 a algo, es un objeto nuevo: cambia de color */
+function rotoWatch(){
+  if(!st.on.roto)return;
+  const ar=trkBuf[2]/255;
+  if(ar>.02&&RTP.prev<=.008)RTP.ci++;
+  RTP.prev=ar;
+}
+reg({id:'ro.mode',lab:'Modo roto',t:'e',opts:ROT_MODES,lk:'efectos',get:()=>RTP.mode,set:v=>{RTP.mode=v;}});
+[['tol','Tolerancia',10,100],['soft','Suavidad borde',0,100],['grow','Borde −/+',-100,100],['mem','Memoria fondo',0,100],['line','Contorno',0,100]].forEach(d=>{
+  reg({id:'ro.'+d[0],lab:d[1],t:'r',min:d[2],max:d[3],step:1,lk:'efectos',get:()=>RTP[d[0]],set:v=>{RTP[d[0]]=v;}});
+});
+reg({id:'ro.shad',lab:'Tolerar sombras',t:'b',lk:'efectos',get:()=>RTP.shad,set:v=>{RTP.shad=v;}});
+reg({id:'ro.cyc',lab:'Color nuevo por objeto',t:'b',lk:'efectos',get:()=>RTP.cyc,set:v=>{RTP.cyc=v;}});
+
+/* ---------- COLLAGE (estilo After Effects): copias del recorte con borde de papel ---------- */
+const CO={n:3,step:3,spread:35,ang:30,tint:45,edge:55,shadow:40,jit:25,ecol:0};
+reg({id:'co.ecol',lab:'Color borde',t:'e',opts:['Blanco','Acento'],lk:'color',get:()=>CO.ecol,set:v=>{CO.ecol=v;}});
+[['n','Copias',0,3,'size'],['step','Separación (cuadros)',1,4,'spd'],['spread','Dispersión',0,100,'amt'],['ang','Ángulo',0,360,'misc'],['tint','Tinte copias',0,100,'amt'],
+ ['edge','Borde papel',0,100,'amt'],['shadow','Sombra',0,100,'amt'],['jit','Temblor',0,100,'amt']].forEach(d=>{
+  reg({id:'co.'+d[0],lab:d[1],t:'r',min:d[2],max:d[3],step:1,lk:'efectos',rg:d[4],get:()=>CO[d[0]],set:v=>{CO[d[0]]=v;}});
+});
+/* anillo de sujetos (RGBA: alpha = máscara), 540x960 */
+const SR={N:13,w:540,h:960,rt:null,head:0,idle:0};
+function srNeed(){return st.on.roto&&(RTP.mode===4||(st.on.stut&&SU.target===1));}
+function srEnsure(tex){
+  SR.idle=0;
+  if(!SR.rt){SR.rt=[];for(let i=0;i<SR.N;i++)SR.rt.push(mkRT(SR.w,SR.h,F8));SR.rt.forEach(r=>{begin(P.slcopy,r,SR.w,SR.h);tex_('uImg',tex);draw3();});}
+}
+function tex_(n,t){tex(n,t,0);}
+function srTex(d){return SR.rt[(SR.head-clampN(Math.round(d),1,SR.N-1)+SR.N*2)%SR.N].tex;}
+function srPush(tx){SR.head=(SR.head+1)%SR.N;begin(P.slcopy,SR.rt[SR.head],SR.w,SR.h);tex('uImg',tx,0);draw3();}
+function srIdle(){if(SR.rt&&++SR.idle>120){SR.rt.forEach(freeRT);SR.rt=null;}}
+function edgeCol(){return CO.ecol===0?[1,1,1]:EF.acc;}
+function collagePass(a){
+  const tq=Math.floor(now*(4+CO.jit*.1));
+  begin(P.collage,T[1-a],RW,RH);tex('uImg',T[a].tex,0);
+  for(let i=0;i<3;i++)tex('uL'+i,srTex((i+1)*CO.step),1+i);
+  U('uN',CO.n);U('uSpread',CO.spread/100);U('uAng',CO.ang*Math.PI/180);U('uTint',CO.tint/100);U('uEdge',CO.edge/100);
+  U('uShadow',CO.shadow/100);U('uJit',CO.jit/100);U('uTq',tq%97);U('uEC',edgeCol());
+  for(let i=0;i<3;i++)U('uTC'+i,ROT_COLS[(RTP.ci+i+1)%ROT_COLS.length]);
+  draw3();return 1-a;
+}
+function cutPass(a,d){
+  const ph=SU.ph,sh=SU.shift/100;
+  begin(P.cut,T[1-a],RW,RH);tex('uImg',T[a].tex,0);tex('uD',srTex(d),1);
+  U('uEdge',CO.edge/100);U('uEC',edgeCol());U('uOff',[(fh(ph*2.1)-.5)*.25*sh,(fh(ph*4.3)-.5)*.15*sh]);
+  draw3();return 1-a;
+}
+
+/* ---------- SLIDES ---------- */
+const SL={n:6,size:34,every:50,life:55,follow:40,border:20,burn:35,big:25,kick:true,live:55};
+const TKM={mode:0};
+reg({id:'tk.mode',lab:'Seguir por',t:'e',opts:['Luz','Movimiento','Luz+mov.'],lk:'efectos',get:()=>TKM.mode,set:v=>{TKM.mode=v;}});
+const AT=1024,TS=256,MAXS=12;
+let ATL=null,slots=[],slLast=0,slIdle=0,slT=0;
+[['n','Cantidad',1,12,'misc'],['size','Tamaño',5,100,'size'],['every','Frecuencia',0,100,'freq'],['life','Duración',0,100,'spd'],
+ ['follow','Seguir tracking',0,100,'misc'],['border','Borde',0,100,'misc'],['live','Recorte vivo',0,100,'amt'],['burn','B/N quemado',0,100,'amt'],['big','Regiones grandes',0,100,'amt']].forEach(d=>{
+  reg({id:'sl.'+d[0],lab:d[1],t:'r',min:d[2],max:d[3],step:1,lk:'efectos',rg:d[4],get:()=>SL[d[0]],set:v=>{SL[d[0]]=v;}});
+});
+reg({id:'sl.kick',lab:'Nace con el kick',t:'b',lk:'efectos',get:()=>SL.kick,set:v=>{SL.kick=v;}});
+function slSpawn(tn){
+  if(slots.length>=Math.min(SL.n,MAXS))return;
+  const used=new Set(slots.map(s=>s.tile));let tile=-1;
+  for(let i=0;i<16;i++)if(!used.has(i)){tile=i;break;}
+  if(tile<0)return;
+  const R=Math.random,vis=tracks.filter(t=>t.age>=2&&t.missed<=6);
+  const big=R()<SL.big/100,live=R()<SL.live/100;
+  let sz=Math.min(OW*.95,OW*(.06+SL.size/100*.5)*(big?1.9:(.55+.7*R())));
+  const life=(.3+SL.life/100*3)*(.6+.8*R());
+  if(live){
+    /* recorte vivo: copia del sujeto tomada en vivo y pegada con desplazamiento */
+    let t=null;if(vis.length)t=vis.slice().sort((p,q)=>q.w*q.h-p.w*p.h)[Math.min(vis.length-1,(R()*2)|0)];
+    const bw=t?Math.max(t.w,OW*.12):OW*.4,bh=t?Math.max(t.h,OH*.08):OH*.3;
+    const w=Math.min(OW*.9,bw*(.45+.6*R())),h=Math.min(OH*.5,bh*(.15+.3*R()));
+    const rx=(R()-.5)*bw*.6,ry=(R()-.5)*bh*.7;
+    const dx=(R()<.5?-1:1)*(.06+.3*R())*w,dy=(R()<.5?-1:1)*(.05+.35*R())*h;
+    slots.push({live:true,tile:-1,tid:t?t.id:0,rx,ry,sx:t?t.cx+rx:OW*.5+rx,sy:t?t.cy+ry:OH*.4+ry,ox:dx,oy:dy,w,h,born:tn,life,burn:false,cap:false});
+    return;
+  }
+  let cx,cy,tid=0,ox=0,oy=0;
+  if(vis.length){const t=vis[(R()*vis.length)|0];tid=t.id;ox=(R()-.5)*t.w*.6;oy=(R()-.5)*t.h*.6;cx=t.cx+ox;cy=t.cy+oy;}
+  else{cx=OW*(.15+.7*R());cy=OH*(.15+.7*R());}
+  slots.push({tile,tid,ox,oy,x:cx,y:cy,w:sz,h:sz*(big?.6+.9*R():.7+.6*R()),born:tn,life,burn:R()<SL.burn/100,cap:true});
+}
+function slideStep(tn,dt){
+  const iv=2.2-SL.every/100*2.1;
+  if(tn-slLast>iv*(.5+Math.random())){slLast=tn;slSpawn(tn);}
+  if(SL.kick&&AUD.on&&AU.live&&AU.kickEvt&&tn-slLast>.12){slLast=tn;slSpawn(tn);}
+  const f=SL.follow/100,k=(1-Math.exp(-dt*(2+SL.follow*.18)))*f;
+  for(const s of slots){
+    if(s.live){
+      const t=s.tid&&tracks.find(q=>q.id===s.tid);
+      if(t&&t.missed<=6){const kk=1-Math.exp(-dt*18);s.sx+=(t.cx+s.rx-s.sx)*kk;s.sy+=(t.cy+s.ry-s.sy)*kk;}
+      continue;
+    }
+    if(!(f>0)||!s.tid)continue;
+    const t=tracks.find(q=>q.id===s.tid);
+    if(t&&t.missed<=6){s.x+=(t.cx+s.ox-s.x)*k;s.y+=(t.cy+s.oy-s.y)*k;}
+  }
+  slots=slots.filter(s=>tn-s.born<s.life);
+}
+function slidePass(a){
+  const tn=now,dt=Math.min(.1,Math.max(.001,tn-slT));slT=tn;
+  slideStep(tn,dt);slIdle=0;
+  if(!ATL)ATL=mkRT(AT,AT,F8,true);
+  const srcT=T[a];let caps=false;
+  for(const s of slots)if(s.cap){
+    s.cap=false;caps=true;
+    begin(P.slcap,ATL,AT,AT);gl.viewport((s.tile%4)*TS,((s.tile/4)|0)*TS,TS,TS);
+    tex('uImg',srcT.tex,0);U('uRect',[s.x/OW,1-s.y/OH,s.w/2/OW,s.h/2/OH]);draw3();
+  }
+  if(caps)mip(ATL);
+  if(!slots.length)return a;
+  let outA=a;
+  if(slots.some(s=>s.live)){outA=1-a;begin(P.slcopy,T[outA],RW,RH);tex('uImg',srcT.tex,0);draw3();}
+  const dst=T[outA];
+  gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+  const bc=boxColor(),kS=RW/OW;
+  for(const s of slots){
+    const age=tn-s.born,rem=s.life-age;
+    let al=Math.min(1,age/.06);
+    if(rem<.25)al*=(Math.floor(rem*40)%2?1:.2);
+    const sc=age<.08?.9+age/.08*.1:1;
+    const pw=Math.max(2,Math.round(s.w*kS*sc)),ph=Math.max(2,Math.round(s.h*kS*sc));
+    const cx=s.live?s.sx+s.ox:s.x,cy=s.live?s.sy+s.oy:s.y;
+    begin(s.live?P.sllive:P.slshow,dst,RW,RH);
+    gl.viewport(Math.round(cx*kS-pw/2),Math.round((OH-cy)*kS-ph/2),pw,ph);
+    if(s.live){tex('uImg',srcT.tex,0);U('uSrc',[s.sx/OW,1-s.sy/OH,s.w/2/OW,s.h/2/OH]);}
+    else{tex('uAtl',ATL.tex,0);U('uTile',[(s.tile%4)*TS/AT,((s.tile/4)|0)*TS/AT,TS/AT,0]);U('uBurn',s.burn?1:0);}
+    U('uA',al);U('uBpx',Math.max(1,2*kS));U('uBorder',SL.border/100);U('uPx',[pw,ph]);U('uLine',bc);
+    draw3();
+  }
+  gl.disable(gl.BLEND);
+  return outA;
+}
+function slideIdle(){if(ATL&&++slIdle>180){freeRT(ATL);ATL=null;slots=[];}}
+
+/* ---------- FLICKER: una luz ---------- */
+const FL={x:50,y:30,size:35,int:80,spd:40,chaos:40,duty:55,floor:5,soft:20,spill:35,col:0,mode:0,follow:false};
+const FLMODES=['Parpadeo','Neón','Vela'],FLCOLN=['Acento','Blanco','Cálido','Frío'];
+const FLCOLS=[null,[1,1,1],[1,.78,.5],[.6,.8,1]];
+let flV=1,flT=0,flP=null;
+reg({id:'fl.mode',lab:'Tipo de luz',t:'e',opts:FLMODES,lk:'efectos',get:()=>FL.mode,set:v=>{FL.mode=v;}});
+reg({id:'fl.col',lab:'Color luz',t:'e',opts:FLCOLN,lk:'color',get:()=>FL.col,set:v=>{FL.col=v;}});
+[['x','Posición X',0,100,'misc'],['y','Posición Y',0,100,'misc'],['size','Tamaño',3,100,'size'],['int','Brillo',0,100,'amt'],
+ ['spd','Velocidad',0,100,'spd'],['chaos','Irregularidad',0,100,'amt'],['duty','Tiempo encendida',5,95,'misc'],['floor','Brillo mínimo',0,100,'misc'],
+ ['soft','Suavidad',0,100,'misc'],['spill','Derrame de luz',0,100,'amt']].forEach(d=>{
+  reg({id:'fl.'+d[0],lab:d[1],t:'r',min:d[2],max:d[3],step:1,lk:'efectos',rg:d[4],get:()=>FL[d[0]],set:v=>{FL[d[0]]=v;}});
+});
+reg({id:'fl.follow',lab:'Seguir tracking',t:'b',lk:'efectos',get:()=>FL.follow,set:v=>{FL.follow=v;}});
+function flNoise(x){const i=Math.floor(x),f=x-i,u=f*f*(3-2*f);return fh(i)*(1-u)+fh(i+1)*u;}
+function flState(){
+  const t=now,dt=Math.min(.1,Math.max(.001,t-flT));flT=t;
+  const sp=.3+FL.spd/100*14,ch=FL.chaos/100;
+  let v=1;
+  if(FL.mode===0){
+    const ph=t*sp,sl=Math.floor(ph),f=ph-sl,duty=Math.min(.95,Math.max(.05,FL.duty/100+(fh(sl*3.1)-.5)*ch*.7));
+    v=f<duty?1:0;
+  }else if(FL.mode===1){
+    const q=Math.floor(t*sp*3),n=fh(q+11);
+    v=n<ch*.55?(fh(q*7.7)<.5?0:.25):1;v*=1-.08*ch*fh(Math.floor(t*60));
+  }else v=Math.min(1,Math.max(0,.2+flNoise(t*sp)*.9+(flNoise(t*sp*4.3+9)-.5)*ch*.8));
+  const fl=FL.floor/100;v=fl+v*(1-fl);
+  flV+=(v-flV)*(1-Math.exp(-dt/(.002+FL.soft/100*.25)));
+  const lv=Math.min(1.5,(st.on.flick?flV*FL.int/100:0)+EF.flk*.9);
+  let px=FL.x/100,py=1-FL.y/100;
+  if(FL.follow){
+    const b=tracks.filter(q=>q.age>=2&&q.missed<=6).sort((p,q)=>q.w*q.h-p.w*p.h)[0];
+    if(b){px=b.cx/OW;py=1-b.cy/OH;}
+  }
+  if(!flP)flP=[px,py];
+  const kk=Math.min(1,dt*8);flP[0]+=(px-flP[0])*kk;flP[1]+=(py-flP[1])*kk;
+  return{v:lv,p:flP,c:FL.col===0?EF.acc:FLCOLS[FL.col],s:.04+FL.size/100*.4,sp:FL.spill/100*.5};
+}
+
+/* ---------- CAJAS: tracking de puntos con cajas y texto ---------- */
+const BX={dens:55,size:50,text:true,lines:30,col:0,boxes:[],id:0};
+const BXCOL=['Lima','Acento','Blanco'];
+const featBuf=new Uint8Array(FXW*FXH*4);
+reg({id:'bx.col',lab:'Color cajas',t:'e',opts:BXCOL,lk:'color',get:()=>BX.col,set:v=>{BX.col=v;}});
+[['dens','Densidad',0,100,'amt'],['size','Tamaño',0,100,'size'],['lines','Líneas',0,100,'amt']].forEach(d=>{
+  reg({id:'bx.'+d[0],lab:d[1],t:'r',min:d[2],max:d[3],step:1,lk:'efectos',rg:d[4],get:()=>BX[d[0]],set:v=>{BX[d[0]]=v;}});
+});
+reg({id:'bx.text',lab:'Texto',t:'b',lk:'efectos',get:()=>BX.text,set:v=>{BX.text=v;}});
+function boxColor(){return BX.col===0?LIME:(BX.col===1?EF.acc:[.95,.96,.98]);}
+function boxCss(){return BX.col===0?'#c8e63c':(BX.col===1?PAL[st.color].c:'#f2f4fa');}
+function boxDims(b){
+  let w=5+Math.pow(b.h0,3.2)*(30+BX.size*1.1);w*=1+b.m*.7;if(b.h0>.985)w*=2.2;
+  return[w,w*(.55+fh(b.id*2.3))];
+}
+function boxesUpdate(){
+  gl.bindFramebuffer(gl.FRAMEBUFFER,featR.fb);
+  gl.readPixels(0,0,FXW,FXH,gl.RGBA,gl.UNSIGNED_BYTE,featBuf);
+  const thr=.6-BX.dens/100*.5,maxN=Math.round(24+BX.dens*2.6),cands=[];
+  for(let y=1;y<FXH-1;y++)for(let x=1;x<FXW-1;x++){
+    const i=(y*FXW+x)*4,s=featBuf[i]/255,m=featBuf[i+1]/255,v=s*(.6+.9*m);
+    if(v<thr)continue;
+    let ok=true;
+    for(let dy=-1;dy<=1&&ok;dy++)for(let dx=-1;dx<=1;dx++){
+      if(!dx&&!dy)continue;
+      const j=((y+dy)*FXW+x+dx)*4;
+      if(featBuf[j]>featBuf[i]||(featBuf[j]===featBuf[i]&&(dy<0||(dy===0&&dx<0)))){ok=false;break;}
+    }
+    if(ok)cands.push({x:(x+.5)/FXW*OW,y:(FXH-1-y+.5)/FXH*OH,v,m});
+  }
+  cands.sort((p,q)=>q.v-p.v);
+  const bs=BX.boxes,rad=OW*.035;
+  bs.forEach(b=>{b.u=0;});
+  for(const c of cands.slice(0,maxN*2)){
+    let bi=-1,bd=rad;
+    for(let k=0;k<bs.length;k++){const b=bs[k];if(b.u)continue;const d=Math.hypot(b.cx-c.x,b.cy-c.y);if(d<bd){bd=d;bi=k;}}
+    if(bi>=0){const b=bs[bi];b.u=1;b.cx+=(c.x-b.cx)*.6;b.cy+=(c.y-b.cy)*.6;b.life=Math.max(b.life,6+((b.h0*10)|0));b.m=c.m;}
+    else if(bs.length<maxN){const id=++BX.id,h=fh(id*1.7);bs.push({id,cx:c.x,cy:c.y,h0:h,life:6+((h*10)|0),m:c.m,u:1});}
+  }
+  for(const b of bs)if(!b.u)b.life--;
+  BX.boxes=bs.filter(b=>b.life>0);
+}
+const BXLAB='(loop (format t "~%"))';
+function drawBoxes(){
+  const c=octx,col=boxCss(),bs=BX.boxes;
+  if(!bs.length)return;
+  c.save();c.lineWidth=2;c.strokeStyle=col;c.fillStyle=col;
+  for(const b of bs){
+    const d=boxDims(b);c.globalAlpha=Math.min(1,b.life/4)*.95;
+    c.strokeRect(Math.round(b.cx-d[0]/2),Math.round(b.cy-d[1]/2),Math.round(d[0]),Math.round(d[1]));
+  }
+  if(BX.lines>0){
+    const maxL=Math.floor(BX.lines/10),anc=bs.filter(b=>b.h0>.9),tg=bs.filter(b=>fh(b.id*4.4)<.15);
+    c.lineWidth=1.5;c.globalAlpha=.75;let n=0;
+    for(const a of anc){for(const t of tg){if(n>=maxL)break;if(t===a)continue;c.beginPath();c.moveTo(a.cx,a.cy);c.lineTo(t.cx,t.cy);c.stroke();n++;}}
+  }
+  if(BX.text){
+    c.font='17px '+MONO;c.fillStyle='#fff';c.globalAlpha=.85;
+    for(const b of bs){
+      if(fh(b.id*5.1)>=.08)continue;
+      const d=boxDims(b),txt=fh(b.id*8.8)<.35?BXLAB:String(72000000+((b.id*7919)%900000))+'.0';
+      c.fillText(txt,b.cx+d[0]/2+6,b.cy+5);
+    }
+  }
+  c.restore();
+}
+
+/* ---------- STUTTER: la imagen salta entre cuadros anteriores ---------- */
+const SU={mode:0,hold:2,delay:5,prob:100,kick:false,n:0,burst:0,target:0,shift:30,ph:0};
+const SUMODES=['Alterna','Rebote','Aleatorio'];
+reg({id:'su.mode',lab:'Patrón',t:'e',opts:SUMODES,lk:'efectos',get:()=>SU.mode,set:v=>{SU.mode=v;}});
+[['hold','Cuadros por salto',1,10,'spd'],['delay','Distancia (cuadros)',1,9,'size'],['prob','Probabilidad',0,100,'amt']].forEach(d=>{
+  reg({id:'su.'+d[0],lab:d[1],t:'r',min:d[2],max:d[3],step:1,lk:'efectos',rg:d[4],get:()=>SU[d[0]],set:v=>{SU[d[0]]=v;}});
+});
+reg({id:'su.target',lab:'Aplica a',t:'e',opts:['Todo','Sujeto (roto)'],lk:'efectos',get:()=>SU.target,set:v=>{SU.target=v;}});
+reg({id:'su.shift',lab:'Desplazamiento sujeto',t:'r',min:0,max:100,step:1,lk:'efectos',rg:'amt',get:()=>SU.shift,set:v=>{SU.shift=v;}});
+reg({id:'su.kick',lab:'Salta con el kick',t:'b',lk:'efectos',get:()=>SU.kick,set:v=>{SU.kick=v;}});
+function stutD(){
+  SU.n++;
+  if(SU.kick&&AUD.on&&AU.live&&AU.kickEvt)SU.burst=4;
+  const ph=Math.floor(SU.n/SU.hold),D=SU.delay;SU.ph=ph;
+  if(SU.kick){if(SU.burst>0){SU.burst--;return D;}return 0;}
+  if(fh(ph*1.9+.3)*100>=SU.prob)return 0;
+  if(SU.mode===0)return ph%2?D:0;
+  if(SU.mode===1){const k=ph%(2*D);return k<D?k:2*D-k;}
+  return fh(ph*3.7)<.6?1+Math.floor(fh(ph*7.1)*D):0;
+}
+
+/* ---------- panel de ajustes (EFFECTS) ---------- */
+function buildEffectSettings(box){
+  const sl=(b,ids)=>{const g=H_('div','sliders');ids.forEach(k=>mkSlider(g,RI[k]));b.append(g);};
+  const sel=(b,ids)=>{const g=H_('div','ap-grid');ids.forEach(k=>mkSelect(g,RI[k]));b.append(g);};
+  box.append(fxDetails('ROTO · AJUSTES',b=>{
+    sel(b,['ro.mode']);
+    sl(b,['ro.tol','ro.soft','ro.grow','ro.mem','ro.line']);
+    b.append(H_('p','hint','COLLAGE (modo Collage): copias retrasadas del recorte, con borde de papel, sombra, tinte y temblor, al estilo de un collage de After Effects.'));
+    sel(b,['co.ecol']);sl(b,['co.n','co.step','co.spread','co.ang','co.tint','co.edge','co.shadow','co.jit']);
+    const c=H_('div','chips wrap');mkChip(c,RI['ro.shad']);mkChip(c,RI['ro.cyc']);
+    const nb=H_('button','chip','Rehacer fondo');nb.type='button';
+    nb.addEventListener('click',()=>{st.reinit=true;st.frozen=false;toast('Fondo reiniciado: sal del cuadro un momento.');});c.append(nb);b.append(c);
+    b.append(H_('p','hint','Deja a la persona u objeto aislado con el fondo del modo elegido (Fondo: oscuro / color / claro / cámara). Tolerancia = cuánto debe cambiar un píxel para contar como sujeto. Memoria = cuánto tarda en absorber como fondo lo que se queda quieto (0 = nunca). Sal del cuadro un momento para que aprenda el fondo limpio.'));
+  }));
+  box.append(fxDetails('SLIDES · AJUSTES',b=>{
+    sel(b,['tk.mode']);
+    sl(b,['sl.n','sl.size','sl.every','sl.life','sl.follow','sl.border','sl.live','sl.burn','sl.big']);
+    const c=H_('div','chips wrap');mkChip(c,RI['sl.kick']);b.append(c);
+    b.append(H_('p','hint','Cada tanto toma un cuadrado de la imagen y lo deja pegado al objeto que se mueve (con Seguir tracking). Recorte vivo = copia en vivo del sujeto pegada con desplazamiento (efecto “tracked cutout”); el resto son cuadrados congelados. Seguir por = qué detecta el tracking (luz, movimiento o ambos). B/N quemado = parche en gris de alto contraste. Regiones grandes = parches más amplios.'));
+  }));
+  box.append(fxDetails('FLICKER · AJUSTES',b=>{
+    sel(b,['fl.mode','fl.col']);
+    sl(b,['fl.x','fl.y','fl.size','fl.int','fl.spd','fl.chaos','fl.duty','fl.floor','fl.soft','fl.spill']);
+    const c=H_('div','chips wrap');mkChip(c,RI['fl.follow']);b.append(c);
+    b.append(H_('p','hint','Una sola luz que parpadea: Parpadeo = prende/apaga, Neón = cortes esporádicos, Vela = oscila suave. Irregularidad la desordena; Brillo mínimo es lo que queda cuando “se apaga”.'));
+  }));
+  box.append(fxDetails('STUTTER · AJUSTES',b=>{
+    sel(b,['su.mode','su.target']);
+    sl(b,['su.hold','su.delay','su.prob','su.shift']);
+    const c=H_('div','chips wrap');mkChip(c,RI['su.kick']);b.append(c);
+    b.append(H_('p','hint','La imagen salta entre el cuadro actual y cuadros anteriores, como un tartamudeo de cámara. Alterna = A/B, Rebote = va y vuelve, Aleatorio = saltos al azar. Cuadros por salto = cuánto dura cada encuadre; Distancia = cuántos cuadros atrás salta. “Sujeto (roto)” hace saltar solo el recorte del Roto (con borde de papel), sobre la escena en vivo; necesita Roto activo.'));
+  }));
+  box.append(fxDetails('CAJAS · AJUSTES',b=>{
+    sel(b,['bx.col']);
+    sl(b,['bx.dens','bx.size','bx.lines']);
+    const c=H_('div','chips wrap');mkChip(c,RI['bx.text']);b.append(c);
+    b.append(H_('p','hint','Detecta puntos con textura (esquinas, bordes) y los marca con cajas que siguen el contenido; más cajas donde hay movimiento. Líneas conecta algunas cajas entre sí.'));
+  }));
 }
 
 /* =====================================================================
@@ -1941,6 +2341,7 @@ function buildEffectsTab(){
   RI['on.roto'].after=v=>{if(v&&!st.frozen)toast('Roto: sal del cuadro un momento, toca Fijar fondo (CAMERA) y vuelve a entrar para dejar el fondo limpio.');};
   const sl=H_('div','sliders');['int','blk','sen','luz','noi','gra'].forEach(k=>mkSlider(sl,RI[k]));box.append(sl);
   const act=H_('div','actions');['bg','pol','color','shape'].forEach(k=>mkCycle(act,RI[k]));box.append(act);
+  buildEffectSettings(box);
 }
 function buildGenerativeTab(){
   const box=$$('#tp-generative');
@@ -2074,9 +2475,15 @@ function applyState(d){
 }
 /* presets de fábrica: solo parámetros de efectos y audio, nunca datos de cámara */
 const FACT=[
+ {name:'★ Collage AE',p:{'on.mosaic':0,'on.track':0,'on.roto':1,'ro.mode':4,'ro.line':0,'co.n':3,'co.step':3,'co.spread':45,'co.tint':50,'co.edge':55,'co.shadow':45,'co.jit':35,'on.stut':1,'su.target':1,'su.hold':3,'su.delay':6,'su.prob':70,'su.shift':40,'a.geo':0,'int':50},mx:[]},
+ {name:'★ Stutter cámara',p:{'on.mosaic':0,'on.track':0,'on.stut':1,'su.mode':0,'su.hold':2,'su.delay':5,'su.prob':100,'a.geo':0,'int':40},mx:[]},
+ {name:'★ Frames (cajas+parches)',p:{'on.mosaic':0,'on.track':0,'on.boxes':1,'on.slide':1,'bx.dens':70,'bx.col':0,'bx.text':1,'bx.lines':35,'sl.live':25,'sl.burn':60,'sl.big':50,'sl.n':7,'sl.border':45,'sl.follow':30,'tk.mode':1,'a.geo':0,'int':55},mx:[]},
+ {name:'★ Tracked cutout',p:{'on.mosaic':0,'on.track':0,'on.slide':1,'sl.live':100,'sl.border':0,'sl.n':8,'sl.every':85,'sl.life':45,'sl.follow':100,'tk.mode':1,'a.geo':0,'int':45},mx:[]},
+ {name:'★ Roto aislado',p:{'on.mosaic':0,'on.track':0,'on.roto':1,'ro.mode':0,'ro.line':45,'ro.cyc':1,'a.geo':0,'int':50},mx:[]},
+ {name:'★ Luz neón',p:{'on.mosaic':0,'on.track':0,'on.flick':1,'fl.mode':1,'fl.int':90,'fl.spd':35,'fl.chaos':60,'fl.size':45,'fl.spill':45,'a.geo':0,'int':50},mx:[]},
  {name:'★ Pulso VJ',p:{'on.mosaic':1,'on.track':0,'on.flick':1,'int':72,'blk':44,'a.geo':1,'g.tri.w':50,'g.morph':35},
   mx:[{src:'kick',dst:'scale',amt:.35,smooth:.1},{src:'bass',dst:'geoS',amt:.9},{src:'hat',dst:'flk',amt:.8},{src:'snare',dst:'rgb',amt:.8,smooth:.05}]},
- {name:'★ Líquido analógico',p:{'on.mosaic':0,'on.track':0,'on.poster':1,'on.fb':1,'on.disp':1,'fx.d_wave':0,'fx.d_liq':1,'fx.d_noise':1,'fx.d_amp':45,'fx.fb_amt':78,'fx.fb_decay':93,'fx.fb_zoom':3,'fx.fb_rot':2,'fx.fb_blend':3,'a.geo':0,'int':40},
+ {name:'★ Líquido analógico',p:{'on.mosaic':0,'on.track':0,'on.fb':1,'on.disp':1,'fx.d_wave':0,'fx.d_liq':1,'fx.d_noise':1,'fx.d_amp':45,'fx.fb_amt':78,'fx.fb_decay':93,'fx.fb_zoom':3,'fx.fb_rot':2,'fx.fb_blend':3,'a.geo':0,'int':40},
   mx:[{src:'lfo',dst:'hue',amt:.6,smooth:.7},{src:'energy',dst:'disp',amt:.6},{src:'noise',dst:'posx',min:-1,max:1,amt:.3,smooth:.8}]},
  {name:'★ Glitch sorter',p:{'on.mosaic':0,'on.track':0,'on.slide':1,'on.sort':1,'on.rgb':1,'fx.sort_len':40,'fx.sort_lo':35,'fx.rgb_or':30,'fx.rgb_ob':-30,'fx.rgb_ca':35,'a.geo':0,'int':65},
   mx:[{src:'energy',dst:'sortL',amt:.7},{src:'snare',dst:'rgb',amt:1,smooth:.05},{src:'kick',dst:'sortT',amt:.5}]},
@@ -2084,7 +2491,7 @@ const FACT=[
   mx:[{src:'bass',dst:'geoS',amt:.7},{src:'kick',dst:'geoC',amt:.6},{src:'lfo',dst:'rot',min:-1,max:1,amt:.2,smooth:.8}]},
  {name:'★ Túnel',p:{'on.mosaic':0,'on.track':0,'on.fb':1,'fx.fb_amt':85,'fx.fb_decay':96,'fx.fb_zoom':12,'fx.fb_rot':6,'fx.fb_blend':3,'a.geo':0},
   mx:[{src:'lfo',dst:'scale',amt:.15,smooth:.6},{src:'bass',dst:'fbZ',amt:.6},{src:'energy',dst:'hue',amt:.4}]},
- {name:'★ Mínimo',p:{'on.mosaic':0,'on.track':0,'on.thresh':1,'luz':50,'noi':55,'gra':4,'a.geo':0,'int':50},
+ {name:'★ Mínimo',p:{'on.mosaic':0,'on.track':0,'on.shapes':1,'luz':50,'noi':55,'gra':4,'a.geo':0,'int':50},
   mx:[{src:'noise',dst:'grain',amt:.6}]}
 ];
 function getStore(){try{const l=JSON.parse(stGet(PKEY)||'[]');return Array.isArray(l)?l:[];}catch(e){return[];}}
@@ -2147,20 +2554,20 @@ const RMODES=[['analog','Analog'],['digital','Digital'],['geometric','Geometric'
 const RLOCKS=[['efectos','Efectos'],['basico','Básicos'],['audio','Audio'],['geo','Geometría'],['fxlab','FX Lab'],['mod','Modulación'],['color','Color']];
 const RND={mode:0,seed:4242,amount:80,locks:{}};
 const PROFILES={
-  analog:{n:[2,4],fx:{fb:1,disp:.8,poster:.5,rgb:.4,slide:.3,track:.3,mosaic:.2,thresh:.3,flick:.2,roto:.2,shapes:.1,sort:.1},
+  analog:{n:[2,4],fx:{fb:1,disp:.8,rgb:.4,slide:.3,track:.3,mosaic:.2,flick:.2,roto:.2,shapes:.1,sort:.1},
     rg:{amt:[.25,.7],size:[.2,.6],spd:[.1,.5],freq:[.1,.5],misc:[.2,.8]},geo:.3,mx:[1,3],smooth:[.4,1],
     dw:{hue:1.5,disp:1.5,fbZ:1.2,posx:1,posy:1,noise:1,grain:1.2,scale:.8,sat:1}},
-  digital:{n:[2,5],fx:{mosaic:1,slide:1,sort:1,flick:.8,rgb:.8,disp:.6,thresh:.5,poster:.4,track:.4,roto:.1,shapes:.3,fb:.2},
+  digital:{n:[2,5],fx:{mosaic:1,slide:1,sort:1,flick:.8,rgb:.8,disp:.6,track:.4,roto:.1,shapes:.3,fb:.2},
     rg:{amt:[.4,.9],size:[.3,.9],spd:[.3,.8],freq:[.3,.8],misc:[.2,.9]},geo:.4,mx:[2,4],smooth:[0,.4],
     dw:{rgb:1.5,sortL:1.5,sortT:1.2,flk:1.2,disp:1,scale:.8,geoC:1,geoS:1}},
-  geometric:{n:[2,4],fx:{shapes:1,mosaic:.8,thresh:.6,poster:.6,track:.6,roto:.5,fb:.4,disp:.2,rgb:.2,sort:.1,slide:.2,flick:.2},
+  geometric:{n:[2,4],fx:{shapes:1,mosaic:.8,track:.6,roto:.5,fb:.4,disp:.2,rgb:.2,sort:.1,slide:.2,flick:.2},
     rg:{amt:[.3,.8],size:[.3,.8],spd:[.2,.6],freq:[.2,.6],misc:[.2,.8]},geo:1,mx:[2,4],smooth:[.1,.7],
     dw:{geoC:1.6,geoS:1.6,geoV:1.2,rot:1,scale:1,color:1}},
-  chaotic:{n:[4,8],fx:{roto:.6,track:.6,mosaic:.6,slide:.6,flick:.6,shapes:.6,thresh:.6,poster:.6,fb:.6,disp:.6,rgb:.6,sort:.6},
+  chaotic:{n:[4,8],fx:{roto:.6,track:.6,mosaic:.6,slide:.6,flick:.6,shapes:.6,fb:.6,disp:.6,rgb:.6,sort:.6},
     rg:{amt:[0,1],size:[0,1],spd:[0,1],freq:[0,1],misc:[0,1]},geo:.7,mx:[3,7],smooth:[0,1],dw:{}},
-  minimal:{n:[1,2],fx:{thresh:1,poster:.8,shapes:.6,mosaic:.5,track:.5,roto:.4,fb:.2,disp:.1,rgb:.05,sort:.05,slide:.1,flick:.05},
+  minimal:{n:[1,2],fx:{shapes:.6,mosaic:.5,track:.5,roto:.4,fb:.2,disp:.1,rgb:.05,sort:.05,slide:.1,flick:.05},
     rg:{amt:[.1,.4],size:[.4,1],spd:[0,.3],freq:[.05,.3],misc:[.2,.6]},geo:.2,mx:[0,1],smooth:[.4,1],dw:{scale:1,grain:1,hue:1}},
-  aggressive:{n:[4,7],fx:{flick:1,rgb:1,sort:1,disp:1,slide:1,mosaic:.8,fb:.6,thresh:.5,poster:.3,shapes:.4,roto:.2,track:.3},
+  aggressive:{n:[4,7],fx:{flick:1,rgb:1,sort:1,disp:1,slide:1,mosaic:.8,fb:.6,shapes:.4,roto:.2,track:.3},
     rg:{amt:[.65,1],size:[0,.7],spd:[.6,1],freq:[.5,1],misc:[.3,1]},geo:.7,mx:[4,8],smooth:[0,.25],
     dw:{flk:1.5,rgb:1.5,disp:1.4,dist:1.2,sortL:1.2,geoC:1,scale:1.2,fbZ:1}}
 };
@@ -2318,7 +2725,7 @@ try{
   if(sessionStorage.getItem('rl.reload')==='1'){sessionStorage.removeItem('rl.reload');const d=JSON.parse(stGet(LKEY)||'null');if(d&&applyState(d))toast('El contexto gráfico se perdió; se restauraron tus ajustes.');}
 }catch(e){}
 setInterval(saveLast,6000);
-window.__rl={st,render,AU,AUD,EF,FX,FXE,MOD,REG,RI,setP,getP,GEO,GF,spawn,auUpdate,applyState,snapshotState,randomize,FACT,P,gl,RND,PROFILES,DESTS,SRCS,newConn,renderMatrix,showTab,TAB,Q,resetAll,
+window.__rl={CO,SU,BX,SL,FL,RTP,slotsN:()=>slots.map(s=>s.live?"L":"F").join(""),slSpawn,st,render,AU,AUD,EF,FX,FXE,MOD,REG,RI,setP,getP,GEO,GF,spawn,auUpdate,applyState,snapshotState,randomize,FACT,P,gl,RND,PROFILES,DESTS,SRCS,newConn,renderMatrix,showTab,TAB,Q,resetAll,
   glErr:()=>gl.getError(),sizes:()=>({RW,RH,RS,ring:!!RG.rt}),lost:()=>LOST};
 })();
 </script>
