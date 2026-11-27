@@ -273,15 +273,27 @@ body.glass .foot{border-top-color:rgba(20,50,100,.2)}
 body.ui-off #zoombar{bottom:max(22px,env(safe-area-inset-bottom,0px))}
 .zb{pointer-events:auto;min-width:36px;height:36px;padding:0 6px;border-radius:18px;border:1px solid rgba(255,255,255,.45);color:#fff;font:700 12px var(--sans);text-shadow:0 1px 1px rgba(0,0,0,.6);background:linear-gradient(180deg,rgba(255,255,255,.38) 0%,rgba(255,255,255,.1) 48%,rgba(0,0,0,.28) 52%,rgba(0,0,0,.5) 100%);box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 2px 6px rgba(0,0,0,.4)}
 .zb.on{min-width:44px;height:44px;border-radius:22px;margin-top:-4px;color:#4a3300;text-shadow:0 1px 0 rgba(255,255,255,.6);border-color:#b78a00;background:linear-gradient(180deg,#fff3b0 0%,#ffd84a 48%,#f2b705 52%,#ffd85c 100%);box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 2px 6px rgba(0,0,0,.45)}
-/* girar el teléfono: panel de controles a un costado */
+/* teléfono en horizontal: imagen a la izquierda, controles a la derecha (vale para vidrio y sólido) */
 @media (orientation:landscape) and (max-height:520px){
-  body.glass #deck{left:auto;right:8px;top:calc(max(8px,env(safe-area-inset-top,0px)) + 56px);bottom:max(8px,env(safe-area-inset-bottom,0px));width:min(46vw,430px);display:flex}
-  body.glass #tabBody{max-height:none;flex:1;min-height:0}
-  body.glass #top{right:auto;width:min(46vw,430px);left:auto;right:8px}
-  body.glass #top .sub{display:none}
-  body.glass #fps{top:12px;left:14px}
-  #zoombar{right:auto;left:14px;bottom:14px;flex-direction:row;justify-content:flex-start}
-  body.glass.sheet-min #deck{top:auto}
+  :root{--pw:min(46vw,430px)}
+  html body #stage{position:absolute!important;left:0!important;top:0!important;bottom:0!important;right:calc(var(--pw) + 16px)!important;padding:6px 0 6px max(6px,env(safe-area-inset-left,0px))!important;z-index:0}
+  html body.ui-off #stage{right:0!important;padding:0!important}
+  html body #top{position:absolute!important;left:auto!important;right:max(8px,env(safe-area-inset-right,0px))!important;top:max(8px,env(safe-area-inset-top,0px))!important;width:var(--pw)!important;border-radius:22px;border:1px solid rgba(255,255,255,.75);box-shadow:inset 0 1px 0 rgba(255,255,255,.95),0 0 0 1px rgba(20,50,100,.3),0 6px 16px rgba(0,20,60,.3)}
+  html body #top .inner{padding-top:6px;padding-bottom:6px}
+  html body #top .sub{display:none}
+  html body #deck{position:absolute!important;left:auto!important;right:max(8px,env(safe-area-inset-right,0px))!important;top:calc(max(8px,env(safe-area-inset-top,0px)) + 54px)!important;bottom:max(8px,env(safe-area-inset-bottom,0px))!important;width:var(--pw)!important;border-radius:22px;border:1px solid rgba(255,255,255,.75);box-shadow:inset 0 1px 0 rgba(255,255,255,.95),0 0 0 1px rgba(20,50,100,.3),0 8px 22px rgba(0,20,60,.35);overflow:hidden}
+  html body.sheet-min #deck{top:auto!important}
+  html body #tabBody{max-height:none;flex:1;min-height:0}
+  html body #fps{left:max(14px,env(safe-area-inset-left,0px))!important;top:12px!important;bottom:auto!important;color:#fff;text-shadow:0 0 3px #000,0 0 3px #000}
+  #zoombar{left:max(14px,env(safe-area-inset-left,0px))!important;right:calc(var(--pw) + 24px)!important;bottom:12px!important;justify-content:center}
+  body.ui-off #zoombar{right:0!important}
+  #start{align-items:flex-start}
+  #start .card{margin:auto;padding-block:34px 14px;gap:10px;max-width:520px}
+  #start .star{display:none}
+  .card h1{font-size:54px}
+  #vmedia{margin-top:6px}
+  #toast{top:8px}
+}
 }
 </style>
 
@@ -3432,7 +3444,7 @@ function wireGeneral(){
   $$('#btnAudio').addEventListener('click',()=>{if(document.body.classList.contains('ui-off'))toggleUI();showTab('audio');});
   $$('#btnHide').addEventListener('click',toggleUI);
   wireGestures();
-  zoomLimits();buildZoomBar();document.body.classList.toggle('land',isLand());
+  zoomLimits();buildZoomBar();orientChanged();
   if('ResizeObserver' in window){new ResizeObserver(()=>{const r=deck.getBoundingClientRect();$$('#app').style.setProperty('--deckH',(window.innerHeight-r.top)+'px');}).observe(deck);}
   /* si la cámara o el video se pausan al volver a la pestaña, se recuperan */
   document.addEventListener('visibilitychange',()=>{
