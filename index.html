@@ -59,7 +59,7 @@ body.ui-off #stage::before,body.ui-off #stage::after{display:none}
 body.ui-off #out{border:0;max-width:100%;max-height:100%}
 
 #deck{background:var(--deck);border-top:1px solid #111;position:relative;z-index:6;display:flex;flex-direction:column;min-height:0;flex:none}
-.grip{align-self:center;width:72px;height:18px;border:0;background:none;padding:0;display:flex;align-items:center;justify-content:center}
+.grip{align-self:stretch;width:100%;height:30px;border:0;background:none;padding:0;display:flex;align-items:center;justify-content:center}
 .grip::before{content:"";width:34px;height:3px;background:#111}
 body.sheet-min #tabBody{display:none}
 .tabbar{border-bottom:1px solid #111}
@@ -267,6 +267,22 @@ body.glass #fps{top:calc(max(8px,env(safe-area-inset-top,0px)) + 74px);left:18px
 body.glass .chip:not([aria-pressed="true"]),body.glass .act:not(.rec){background:var(--pill)}
 body.glass details.fxd,body.glass .mxc,body.glass .prow{background:linear-gradient(180deg,rgba(255,255,255,.85),rgba(228,237,248,.78))}
 body.glass .foot{border-top-color:rgba(20,50,100,.2)}
+
+/* zoom tipo Cámara de iOS */
+#zoombar{position:absolute;left:0;right:0;bottom:calc(max(var(--deckH,0px),0px) + 14px);display:flex;justify-content:center;gap:7px;z-index:7;pointer-events:none}
+body.ui-off #zoombar{bottom:max(22px,env(safe-area-inset-bottom,0px))}
+.zb{pointer-events:auto;min-width:36px;height:36px;padding:0 6px;border-radius:18px;border:1px solid rgba(255,255,255,.45);color:#fff;font:700 12px var(--sans);text-shadow:0 1px 1px rgba(0,0,0,.6);background:linear-gradient(180deg,rgba(255,255,255,.38) 0%,rgba(255,255,255,.1) 48%,rgba(0,0,0,.28) 52%,rgba(0,0,0,.5) 100%);box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 2px 6px rgba(0,0,0,.4)}
+.zb.on{min-width:44px;height:44px;border-radius:22px;margin-top:-4px;color:#4a3300;text-shadow:0 1px 0 rgba(255,255,255,.6);border-color:#b78a00;background:linear-gradient(180deg,#fff3b0 0%,#ffd84a 48%,#f2b705 52%,#ffd85c 100%);box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 2px 6px rgba(0,0,0,.45)}
+/* girar el teléfono: panel de controles a un costado */
+@media (orientation:landscape) and (max-height:520px){
+  body.glass #deck{left:auto;right:8px;top:calc(max(8px,env(safe-area-inset-top,0px)) + 56px);bottom:max(8px,env(safe-area-inset-bottom,0px));width:min(46vw,430px);display:flex}
+  body.glass #tabBody{max-height:none;flex:1;min-height:0}
+  body.glass #top{right:auto;width:min(46vw,430px);left:auto;right:8px}
+  body.glass #top .sub{display:none}
+  body.glass #fps{top:12px;left:14px}
+  #zoombar{right:auto;left:14px;bottom:14px;flex-direction:row;justify-content:flex-start}
+  body.glass.sheet-min #deck{top:auto}
+}
 </style>
 
 <div id="app">
@@ -1106,6 +1122,7 @@ function render(s,t){
   const sa=s.w/s.h,oa=OW/OH;let sx=1,sy=1;
   if(sa>oa)sx=oa/sa;else sy=sa/oa;
   if(st.source==='camera'&&st.facing==='user')sx=-sx;
+  const zf=zoomTick();sx/=zf;sy/=zf;
   const tx=[sx,sy],on=st.on;
   const cur=cA[ci],prev=cA[1-ci],mo=mM[mj],mp=mM[1-mj];
   begin(P.small,cur,AW,AH);tex('uSrc',srcTex,0);U('uTx',tx);draw3();mip(cur);
@@ -1306,16 +1323,133 @@ function hideStart(){
   $('#start').hidden=true;needInit=true;tracks=[];
   try{if('wakeLock' in navigator&&!wake)navigator.wakeLock.request('screen').then(l=>{wake=l;l.addEventListener('release',()=>{wake=null;});}).catch(()=>{});}catch(e){}
 }
-function useDemo(){stopStream();vid.pause();vid.srcObject=null;st.source='demo';hideStart();}
+function useDemo(){stopStream();vid.pause();vid.srcObject=null;st.source='demo';hideStart();ZM.lens='wide';}
+/* ---------- lentes y zoom (como la app Cámara) ---------- */
+const ZM={z:1,zs:1,min:1,max:10,lens:'wide',devs:{},hw:null,hwF:1,busy:false,want:null,sf:1,info:null,bar:null,btns:[],lastLbl:'',t:0};
+const LENS_BASE={uw:.5,wide:1,tele:4,front:1};
+const LENS_NAME={uw:'ultra gran angular',wide:'gran angular',tele:'teleobjetivo',front:'frontal'};
+async function scanLenses(){
+  try{
+    const ds=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
+    const dv={};
+    ds.forEach(d=>{
+      const l=(d.label||'').toLowerCase();
+      if(/front|frontal|user|delantera|selfie/.test(l))dv.front=dv.front||d.deviceId;
+      else if(/ultra|0\.5|0,5/.test(l))dv.uw=d.deviceId;
+      else if(/tele/.test(l))dv.tele=d.deviceId;
+      else if(/dual|triple|desk|escritorio/.test(l)){}
+      else if(/back|trasera|rear|environment|camera|cámara/.test(l))dv.wide=dv.wide||d.deviceId;
+    });
+    ZM.devs=dv;
+  }catch(e){}
+  zoomLimits();buildZoomBar();
+}
+function zoomLimits(){
+  ZM.min=(st.facing==='environment'&&ZM.devs.uw)?.5:1;
+  ZM.max=10;
+  ZM.z=Math.min(ZM.max,Math.max(ZM.min,ZM.z));ZM.zs=Math.min(ZM.max,Math.max(ZM.min,ZM.zs));
+}
+function desiredLens(z){
+  if(st.facing==='user')return'front';
+  if(z<.98&&ZM.devs.uw)return'uw';
+  if(z>=3.98&&ZM.devs.tele)return'tele';
+  return'wide';
+}
+function setupTrackZoom(){
+  ZM.hw=null;ZM.hwF=1;
+  try{
+    const tr=stream&&stream.getVideoTracks()[0];
+    const c=tr&&tr.getCapabilities&&tr.getCapabilities();
+    if(c&&c.zoom&&c.zoom.max>1.05)ZM.hw={min:c.zoom.min||1,max:c.zoom.max,tr};
+  }catch(e){}
+}
+async function openCam(){
+  const v={width:{ideal:1080},height:{ideal:1920},frameRate:{ideal:30}};
+  const id=ZM.devs[ZM.lens];
+  if(id&&(ZM.lens!=='wide'||ZM.devs.uw||ZM.devs.tele))v.deviceId={exact:id};else v.facingMode={ideal:st.facing};
+  const ns=await navigator.mediaDevices.getUserMedia({video:v,audio:false});
+  const old=stream;stream=ns;vid.srcObject=ns;vid.muted=true;await vid.play();
+  if(old)old.getTracks().forEach(t=>t.stop());
+  setupTrackZoom();
+}
+async function switchLens(l){
+  if(ZM.busy||l===ZM.lens||st.source!=='camera')return;
+  ZM.busy=true;const prev=ZM.lens;ZM.lens=l;
+  try{await openCam();needInit=true;}catch(e){ZM.lens=prev;}
+  ZM.busy=false;
+}
+function zoomTick(){
+  const n=performance.now(),dt=Math.min(.1,Math.max(.001,(n-(ZM.t||n))/1000));ZM.t=n;
+  const d=ZM.z-ZM.zs;
+  ZM.zs=Math.abs(d)<.003?ZM.z:ZM.zs+d*(1-Math.exp(-dt*12));
+  if(st.source==='camera'){
+    const dl=desiredLens(ZM.zs);if(dl!==ZM.lens&&!ZM.busy)switchLens(dl);
+  }
+  let f=ZM.zs/(st.source==='camera'?LENS_BASE[ZM.lens]:1);
+  if(st.source!=='camera')f=ZM.zs;
+  f=Math.max(1,f);
+  if(ZM.hw&&st.source==='camera'){
+    const h=Math.min(ZM.hw.max,Math.max(ZM.hw.min,f));
+    if(Math.abs(h-ZM.hwF)>.01*ZM.hwF&&!ZM.hwBusy){
+      ZM.hwBusy=true;ZM.hwF=h;
+      ZM.hw.tr.applyConstraints({advanced:[{zoom:h}]}).catch(()=>{ZM.hw=null;ZM.hwF=1;}).then(()=>{ZM.hwBusy=false;});
+    }
+    f=f/ZM.hwF;
+  }
+  ZM.sf=Math.max(1,f);
+  zoomLabel();
+  return ZM.sf;
+}
+function setZoom(z,instant){
+  ZM.z=Math.min(ZM.max,Math.max(ZM.min,z));
+  if(instant)ZM.zs=ZM.z;
+}
+const ZSTOPS=[.5,1,2,4,8];
+function buildZoomBar(){
+  if(!ZM.bar){ZM.bar=document.createElement('div');ZM.bar.id='zoombar';$('#app').append(ZM.bar);}
+  ZM.bar.textContent='';ZM.btns=[];
+  ZSTOPS.filter(s=>s>=ZM.min-.001&&s<=ZM.max).forEach(s=>{
+    const b=document.createElement('button');b.type='button';b.className='zb';b.dataset.z=s;
+    b.textContent=(s===.5?'.5':s)+'';
+    b.addEventListener('click',e=>{e.stopPropagation();setZoom(s);});
+    ZM.bar.append(b);ZM.btns.push(b);
+  });
+  ZM.lastLbl='';zoomLabel(true);
+  if(ZM.info){
+    const names=['uw','wide','tele'].filter(k=>k==='wide'||ZM.devs[k]).map(k=>LENS_NAME[k]);
+    ZM.info.textContent=st.facing==='user'
+      ?'Cámara frontal: el zoom es digital. Pellizca la pantalla o usa los botones de zoom.'
+      :'Lentes detectados: '+names.join(', ')+'. Pellizca la pantalla o usa los botones de zoom; la app cambia de lente sola como la cámara del iPhone'+(ZM.devs.tele?'':' (sin teleobjetivo detectado: del 2x en adelante es zoom digital)')+'.';
+  }
+}
+function zoomLabel(force){
+  if(!ZM.bar)return;
+  const show=st.source!=='none';
+  if(ZM.bar.hidden===show)ZM.bar.hidden=!show;
+  const z=ZM.zs;let best=null,bd=1e9;
+  ZM.btns.forEach(b=>{const d=Math.abs(Math.log(z/(+b.dataset.z)));if(d<bd){bd=d;best=b;}});
+  const lbl=best?best.dataset.z+'|'+z.toFixed(1):'';
+  if(!force&&lbl===ZM.lastLbl)return;ZM.lastLbl=lbl;
+  ZM.btns.forEach(b=>{
+    const act=b===best,exact=Math.abs(z-(+b.dataset.z))<.05;
+    b.classList.toggle('on',act);
+    b.textContent=act&&!exact?(z<10?z.toFixed(1):'10')+'×':(+b.dataset.z===.5?'.5':b.dataset.z)+(act?'×':'');
+  });
+}
+if(navigator.mediaDevices&&navigator.mediaDevices.addEventListener)navigator.mediaDevices.addEventListener('devicechange',()=>{if(st.source==='camera')scanLenses();});
 async function startCamera(){
   stopStream();vid.srcObject=null;vid.removeAttribute('src');vid.loop=false;
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
     toast('Este navegador no da acceso a la cámara aquí. Ábrelo directo en Safari por https. Muestro la demo.');useDemo();return;
   }
   try{
-    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:st.facing},width:{ideal:1080},height:{ideal:1920},frameRate:{ideal:30}},audio:false});
-    vid.srcObject=stream;vid.muted=true;await vid.play();
+    ZM.lens=st.facing==='user'?'front':'wide';
+    if(st.facing==='user'||ZM.z<1&&!ZM.devs.uw){ZM.z=ZM.zs=1;}
+    await openCam();
     st.source='camera';hideStart();
+    await scanLenses();
+    /* si ya había un zoom elegido y pide otro lente, cambia ahora */
+    const dl=desiredLens(ZM.z);if(dl!==ZM.lens)switchLens(dl);
   }catch(e){
     const n=e&&e.name;
     toast(n==='NotAllowedError'
@@ -2809,9 +2943,26 @@ function fmtFollow(s){
   const d=fitSide(s.w,s.h,1920);
   if(Math.abs(d[0]/OW-1)>.01||Math.abs(d[1]/OH-1)>.01)applyFormat(d[0],d[1]);
 }
+const ORI={auto:true,t:0};
+const isLand=()=>window.innerWidth>window.innerHeight*1.05;
+function fmtDims(){
+  const f=FMTS[st.fmt];let w=f[1],h=f[2];
+  if(ORI.auto&&w!==h&&(w>h)!==isLand()){const t=w;w=h;h=t;}
+  return[w,h];
+}
+function orientChanged(){
+  clearTimeout(ORI.t);
+  ORI.t=setTimeout(()=>{
+    document.body.classList.toggle('land',isLand());
+    if(st.fmt<4&&!rec){const d=fmtDims();applyFormat(d[0],d[1]);}
+  },220);
+}
+window.addEventListener('resize',orientChanged);
+window.addEventListener('orientationchange',orientChanged);
+reg({id:'ui.autorot',lab:'Rotación automática',t:'b',np:true,lk:'none',get:()=>ORI.auto,set:v=>{ORI.auto=v;orientChanged();}});
 reg({id:'fmt',lab:'Formato de salida',t:'e',opts:FMTS.map(f=>f[0]),np:true,lk:'none',get:()=>st.fmt,set:v=>{
   if(rec){toast('Cambia el formato antes de grabar.');return;}
-  st.fmt=v;if(v<4)applyFormat(FMTS[v][1],FMTS[v][2]);
+  st.fmt=v;if(v<4){const d=fmtDims();applyFormat(d[0],d[1]);}
 }});
 
 /* ---- pestañas ---- */
@@ -2832,7 +2983,8 @@ function buildCameraTab(){
   });
   act.append(bF,bS,bX);box.append(act);
   const g=H_('div','ap-grid');mkSelect(g,RI.fmt);mkSelect(g,RI.res);box.append(g);
-  const gc=H_('div','chips wrap');mkChip(gc,RI['ui.glass']);box.append(gc);
+  const gc=H_('div','chips wrap');mkChip(gc,RI['ui.glass']);mkChip(gc,RI['ui.autorot']);box.append(gc);
+  ZM.info=H_('p','hint','');box.append(ZM.info);buildZoomBar();
   box.append(H_('p','hint','Salida 1080×1920 (Stories). “Auto” baja la resolución interna sola si el teléfono no llega a los cuadros por segundo; el archivo final sigue siendo 1080×1920. Roto: sal del cuadro, toca Fijar fondo y vuelve a entrar.'));
 }
 function buildEffectsTab(){
@@ -3219,9 +3371,21 @@ function wireGestures(){
   const stage=$$('#stage'),deck=$$('#deck'),B=document.body.classList;
   /* pantalla: 1 toque muestra/oculta controles, 2 toques cambian de cámara, deslizar arriba muestra controles */
   let gx=0,gy=0,gt=0,gOn=false,tapT=0,tapTimer=0;
-  stage.addEventListener('pointerdown',e=>{gx=e.clientX;gy=e.clientY;gt=performance.now();gOn=true;});
-  stage.addEventListener('pointercancel',()=>{gOn=false;});
+  const pts=new Map();let pd0=0,pz0=1,pinched=false;
+  const pdist=()=>{const a=[...pts.values()];return Math.hypot(a[0][0]-a[1][0],a[0][1]-a[1][1])||1;};
+  stage.addEventListener('pointerdown',e=>{
+    pts.set(e.pointerId,[e.clientX,e.clientY]);
+    if(pts.size===2){gOn=false;pinched=true;clearTimeout(tapTimer);tapT=0;pd0=pdist();pz0=ZM.z;return;}
+    if(pts.size===1)pinched=false;
+    gx=e.clientX;gy=e.clientY;gt=performance.now();gOn=true;
+  });
+  stage.addEventListener('pointermove',e=>{
+    if(!pts.has(e.pointerId))return;pts.set(e.pointerId,[e.clientX,e.clientY]);
+    if(pts.size===2&&pd0)setZoom(pz0*pdist()/pd0,true);
+  });
+  stage.addEventListener('pointercancel',e=>{pts.delete(e.pointerId);gOn=false;});
   stage.addEventListener('pointerup',e=>{
+    pts.delete(e.pointerId);if(pinched){if(!pts.size)pinched=false;gOn=false;return;}
     if(!gOn)return;gOn=false;
     const dx=e.clientX-gx,dy=e.clientY-gy,dt=performance.now()-gt;
     if(Math.abs(dy)>50&&Math.abs(dy)>Math.abs(dx)*1.5){if(dy<0)revealUI();return;}
@@ -3236,7 +3400,7 @@ function wireGestures(){
   const tb=$$('#tabBody');
   deck.addEventListener('touchstart',e=>{
     const t=e.touches[0];sx=t.clientX;sy=t.clientY;sTop=tb.scrollTop;
-    sRange=!!(e.target.closest&&e.target.closest('input[type=range],select,textarea'));
+    sRange=!!(e.target.closest&&e.target.closest('input[type=range],select,textarea'))||(t.clientY-deck.getBoundingClientRect().top)>40;
   },{passive:true});
   deck.addEventListener('touchend',e=>{
     if(sRange||e.touches.length)return;
@@ -3254,6 +3418,7 @@ function toggleUI(){
   if(off)toast('Toca la pantalla para mostrar los controles.');
 }
 function wireGeneral(){
+  const deck=$$('#deck');
   try{if(localStorage.getItem('rl.min')==='1')document.body.classList.add('sheet-min');}catch(e){}
   $$('#grip').addEventListener('click',()=>{const m=document.body.classList.toggle('sheet-min');try{localStorage.setItem('rl.min',m?'1':'0');}catch(e){}});
   $$('#btnPhoto').addEventListener('click',()=>{if(st.source==='none')return;out.toBlob(b=>{if(b)openViewer(b);},'image/png');});
@@ -3267,6 +3432,8 @@ function wireGeneral(){
   $$('#btnAudio').addEventListener('click',()=>{if(document.body.classList.contains('ui-off'))toggleUI();showTab('audio');});
   $$('#btnHide').addEventListener('click',toggleUI);
   wireGestures();
+  zoomLimits();buildZoomBar();document.body.classList.toggle('land',isLand());
+  if('ResizeObserver' in window){new ResizeObserver(()=>{const r=deck.getBoundingClientRect();$$('#app').style.setProperty('--deckH',(window.innerHeight-r.top)+'px');}).observe(deck);}
   /* si la cámara o el video se pausan al volver a la pestaña, se recuperan */
   document.addEventListener('visibilitychange',()=>{
     if(document.hidden)return;
